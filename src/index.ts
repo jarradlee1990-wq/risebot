@@ -106,27 +106,26 @@ async function sendMarketCard(chatId: number, address: string) {
 
 async function handleLookup(chatId: number, rawInput: string) {
   const address = extractAddress(rawInput);
+  return handleResolvedLookup(chatId, address);
+}
 
+async function handleResolvedLookup(chatId: number, address: string | null) {
   if (!address) {
-    await bot.telegram.sendMessage(
-      chatId,
-      "Send a Rise token mint or Rise market address.\n\nExamples:\n`/token 7r8Z8FMKnbfALBL8A86cnYCgboBYyoHw4bZ4Kz34rise`\n`7r8Z8FMKnbfALBL8A86cnYCgboBYyoHw4bZ4Kz34rise`",
-      { parse_mode: "Markdown" },
-    );
-    return;
+    return false;
   }
 
   await bot.telegram.sendChatAction(chatId, "upload_photo");
 
   try {
     await sendMarketCard(chatId, address);
+    return true;
   } catch (error) {
     if (error instanceof RiseApiError) {
       await bot.telegram.sendMessage(
         chatId,
         `I couldn't load that Rise token.\n\n${error.message}`,
       );
-      return;
+      return true;
     }
 
     console.error("Unexpected lookup failure:", error);
@@ -134,6 +133,22 @@ async function handleLookup(chatId: number, rawInput: string) {
       chatId,
       "Something went wrong while loading that token. Check your API key and try again.",
     );
+    return true;
+  }
+}
+
+async function sendUsageMessage(chatId: number) {
+  await bot.telegram.sendMessage(
+    chatId,
+    "Send a Rise token mint or Rise market address.\n\nExamples:\n`/token 7r8Z8FMKnbfALBL8A86cnYCgboBYyoHw4bZ4Kz34rise`\n`7r8Z8FMKnbfALBL8A86cnYCgboBYyoHw4bZ4Kz34rise`",
+    { parse_mode: "Markdown" },
+  );
+}
+
+async function handleTokenCommand(chatId: number, rawInput: string) {
+  const handled = await handleLookup(chatId, rawInput);
+  if (!handled) {
+    await sendUsageMessage(chatId);
   }
 }
 
@@ -162,7 +177,7 @@ bot.help(async (ctx) => {
 
 bot.command("token", async (ctx) => {
   const text = ctx.message.text.replace(/^\/token(@\w+)?/i, "").trim();
-  await handleLookup(ctx.chat.id, text);
+  await handleTokenCommand(ctx.chat.id, text);
 });
 
 bot.on("text", async (ctx) => {
