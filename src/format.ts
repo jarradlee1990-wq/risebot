@@ -206,7 +206,7 @@ export function buildMarketCaption(
     `💰 Price: ${formatScannerPrice(market.price)} ${collateralSymbol} | Floor: ${formatScannerPrice(market.mayflower_floor)} ${collateralSymbol}`,
     `💎 FDV: ${formatCompact(market.market_cap_usd)} | Age: ${formatAge(market.created_at)}`,
     `📉 Liq: ${liquidityHuman} ${collateralSymbol} | 👥 ${formatCompact(market.holders_count, 0)} holders`,
-    `📊 Vol: ${formatCompact(market.volume_h24_usd)}`,
+    `📊 Vol 24h: ${formatCompact(market.volume_h24_usd)}`,
     "",
     `📋 Mint: <code>${escapeHtml(shortAddress(market.mint_token, 10, 8))}</code>`,
     "",
