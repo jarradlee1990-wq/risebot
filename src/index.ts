@@ -166,6 +166,10 @@ bot.command("token", async (ctx) => {
 });
 
 bot.on("text", async (ctx) => {
+  if (/^\/\w+/.test(ctx.message.text)) {
+    return;
+  }
+
   await handleLookup(ctx.chat.id, ctx.message.text);
 });
 
