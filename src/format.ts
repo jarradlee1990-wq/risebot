@@ -1,4 +1,4 @@
-import type { RiseMarket, RiseTransaction } from "./rise-api.js";
+import type { RiseMarket } from "./rise-api.js";
 
 type FormattedMarketCard = {
   caption: string;
@@ -173,7 +173,6 @@ function toHandle(url: string | undefined): string | null {
 
 export function buildMarketCaption(
   market: RiseMarket,
-  _transactions: RiseTransaction[],
   collateralSymbol: string,
   collateralDecimals: number,
 ): FormattedMarketCard {

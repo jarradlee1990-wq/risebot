@@ -6,11 +6,9 @@ Telegram bot that accepts a Rise token mint or Rise market address and returns a
 
 - token name, symbol, and image
 - current price and floor price
-- market cap, 24h volume, and all-time volume
-- liquidity, debt, collateral, supply, holders, and age
-- buy/sell fees and creator fee
-- recent transactions
-- quick links to DexScreener, Solscan, and project socials
+- market cap, 24h volume, liquidity, holders, and age
+- quick links to Rise and Solscan
+- admin usage stats via `/stats`
 
 ## Requirements
 
@@ -27,6 +25,7 @@ Telegram bot that accepts a Rise token mint or Rise market address and returns a
 TELEGRAM_BOT_TOKEN=...
 RISE_API_KEY=...
 RISE_BASE_URL=https://public.rise.rich
+ADMIN_TELEGRAM_USER_ID=...
 ```
 
 3. Install dependencies:
@@ -47,12 +46,14 @@ npm run start
 - `/help`
 - `/token <mint-or-market-address>`
 - or paste a Rise address directly into chat
+- `/stats` for the admin user configured in `ADMIN_TELEGRAM_USER_ID`
 
 ## Notes
 
 - The Rise REST API accepts either the token mint or the Rise market address for market lookups, quotes, and transactions.
 - This bot uses the documented Rise REST endpoints and includes the required `x-api-key` header.
 - If Telegram cannot send the token image, the bot falls back to a text-only message automatically.
+- Usage stats are stored in `data/usage-stats.json`. On Render, local files are not durable across full rebuilds/redeploys unless you attach persistent storage or move this to a database.
 
 ## Relevant docs
 

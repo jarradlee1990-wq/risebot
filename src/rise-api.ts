@@ -32,30 +32,10 @@ export type RiseMarket = {
   created_at: string;
 };
 
-export type RiseTransaction = {
-  transaction_type: string;
-  wallet_address: string;
-  price: string;
-  floor_price: string;
-  amount_put: string;
-  amount_received: string;
-  token_supply: string;
-  transaction_signature: string;
-  slot: number;
-  created_at: string;
-  volume_usd?: string;
-};
-
 type MarketResponse = {
   ok: boolean;
   error?: string;
   market?: RiseMarket;
-};
-
-type TransactionsResponse = {
-  ok: boolean;
-  error?: string;
-  transactions?: RiseTransaction[];
 };
 
 export class RiseApiError extends Error {
@@ -79,18 +59,6 @@ export class RiseApiClient {
     }
 
     return response.market;
-  }
-
-  async getTransactions(address: string, limit = 5): Promise<RiseTransaction[]> {
-    const response = await this.request<TransactionsResponse>(
-      `/markets/${address}/transactions?page=1&limit=${limit}`,
-    );
-
-    if (!response.ok) {
-      throw new RiseApiError(response.error ?? "Unable to load transactions");
-    }
-
-    return response.transactions ?? [];
   }
 
   getCollateralSymbol(mintMain: string): string {

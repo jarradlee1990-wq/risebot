@@ -1,29 +1,109 @@
 import "dotenv/config";
 
+import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
+
 import { z } from "zod";
 import { Markup, Telegraf } from "telegraf";
 
 import { buildMarketCaption } from "./format.js";
 import { RiseApiClient, RiseApiError } from "./rise-api.js";
+import { UsageStore, type UsageEvent } from "./usage-store.js";
 
 const configSchema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().min(1, "TELEGRAM_BOT_TOKEN is required"),
   RISE_API_KEY: z.string().min(1, "RISE_API_KEY is required"),
   RISE_BASE_URL: z.string().url().default("https://public.rise.rich"),
+  ADMIN_TELEGRAM_USER_ID: z.string().optional(),
 });
 
 const config = configSchema.parse({
   TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN,
   RISE_API_KEY: process.env.RISE_API_KEY,
   RISE_BASE_URL: process.env.RISE_BASE_URL ?? "https://public.rise.rich",
+  ADMIN_TELEGRAM_USER_ID: process.env.ADMIN_TELEGRAM_USER_ID,
 });
 
 const riseApi = new RiseApiClient(config.RISE_BASE_URL, config.RISE_API_KEY);
 const bot = new Telegraf(config.TELEGRAM_BOT_TOKEN);
+const usageStore = new UsageStore(join(process.cwd(), "data", "usage-stats.json"));
 
 const ADDRESS_REGEX = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const ADDRESS_GLOBAL_REGEX = /[1-9A-HJ-NP-Za-km-z]{32,44}/g;
 const RISE_MINT_REGEX = /^[1-9A-HJ-NP-Za-km-z]{28,40}rise$/i;
+
+function getUsageEvent(ctx: {
+  chat: {
+    id: number;
+    type: "private" | "group" | "supergroup" | "channel";
+    title?: string;
+    username?: string;
+  };
+  from?: {
+    id: number;
+    username?: string;
+    first_name?: string;
+  };
+}): UsageEvent {
+  return {
+    chatId: ctx.chat.id,
+    chatType: ctx.chat.type,
+    chatTitle: "title" in ctx.chat ? ctx.chat.title : undefined,
+    chatUsername: "username" in ctx.chat ? ctx.chat.username : undefined,
+    userId: ctx.from?.id,
+    username: ctx.from?.username,
+    firstName: ctx.from?.first_name,
+  };
+}
+
+function isAdminUser(userId: number | undefined): boolean {
+  return Boolean(
+    userId !== undefined &&
+      config.ADMIN_TELEGRAM_USER_ID &&
+      String(userId) === config.ADMIN_TELEGRAM_USER_ID,
+  );
+}
+
+function formatChatLabel(chat: {
+  title?: string;
+  username?: string;
+  firstName?: string;
+  id: string;
+}): string {
+  return chat.title ?? chat.username ?? chat.firstName ?? chat.id;
+}
+
+async function sendStatsMessage(chatId: number): Promise<void> {
+  const summary = usageStore.getSummary();
+  const lines = [
+    "Bot usage stats",
+    "",
+    `Unique chats: ${summary.uniqueChats}`,
+    `Private chats: ${summary.privateChats}`,
+    `Group chats: ${summary.groupChats}`,
+    `Unique users: ${summary.uniqueUsers}`,
+    `Active chats (24h): ${summary.activeChats24h}`,
+    `Active groups (24h): ${summary.activeGroups24h}`,
+    `Total messages: ${summary.totalMessages}`,
+    `Total lookups: ${summary.totalLookups}`,
+    `Successful lookups: ${summary.successfulLookups}`,
+    `Failed lookups: ${summary.failedLookups}`,
+    "",
+    "Top groups by lookups:",
+    ...(
+      summary.topGroups.length > 0
+        ? summary.topGroups.map(
+            (group, index) =>
+              `${index + 1}. ${formatChatLabel(group)} - ${group.lookupCount} lookups / ${group.messageCount} msgs`,
+          )
+        : ["No groups tracked yet."]
+    ),
+    "",
+    `Updated: ${summary.updatedAt}`,
+  ];
+
+  await bot.telegram.sendMessage(chatId, lines.join("\n"));
+}
 
 function extractAddress(input: string): string | null {
   const trimmed = input.trim();
@@ -70,16 +150,12 @@ function buildKeyboard(links: {
 }
 
 async function sendMarketCard(chatId: number, address: string) {
-  const [market, transactions] = await Promise.all([
-    riseApi.getMarket(address),
-    riseApi.getTransactions(address, 5),
-  ]);
+  const market = await riseApi.getMarket(address);
 
   const collateralSymbol = riseApi.getCollateralSymbol(market.mint_main);
   const collateralDecimals = riseApi.getCollateralDecimals(market.mint_main);
   const card = buildMarketCaption(
     market,
-    transactions,
     collateralSymbol,
     collateralDecimals,
   );
@@ -104,12 +180,20 @@ async function sendMarketCard(chatId: number, address: string) {
   });
 }
 
-async function handleLookup(chatId: number, rawInput: string) {
+async function handleLookup(
+  chatId: number,
+  rawInput: string,
+  usageEvent?: UsageEvent,
+) {
   const address = extractAddress(rawInput);
-  return handleResolvedLookup(chatId, address);
+  return handleResolvedLookup(chatId, address, usageEvent);
 }
 
-async function handleResolvedLookup(chatId: number, address: string | null) {
+async function handleResolvedLookup(
+  chatId: number,
+  address: string | null,
+  usageEvent?: UsageEvent,
+) {
   if (!address) {
     return false;
   }
@@ -118,9 +202,15 @@ async function handleResolvedLookup(chatId: number, address: string | null) {
 
   try {
     await sendMarketCard(chatId, address);
+    if (usageEvent) {
+      await usageStore.recordLookup(usageEvent, "success");
+    }
     return true;
   } catch (error) {
     if (error instanceof RiseApiError) {
+      if (usageEvent) {
+        await usageStore.recordLookup(usageEvent, "failure");
+      }
       await bot.telegram.sendMessage(
         chatId,
         `I couldn't load that Rise token.\n\n${error.message}`,
@@ -129,6 +219,9 @@ async function handleResolvedLookup(chatId: number, address: string | null) {
     }
 
     console.error("Unexpected lookup failure:", error);
+    if (usageEvent) {
+      await usageStore.recordLookup(usageEvent, "failure");
+    }
     await bot.telegram.sendMessage(
       chatId,
       "Something went wrong while loading that token. Check your API key and try again.",
@@ -145,8 +238,12 @@ async function sendUsageMessage(chatId: number) {
   );
 }
 
-async function handleTokenCommand(chatId: number, rawInput: string) {
-  const handled = await handleLookup(chatId, rawInput);
+async function handleTokenCommand(
+  chatId: number,
+  rawInput: string,
+  usageEvent?: UsageEvent,
+) {
+  const handled = await handleLookup(chatId, rawInput, usageEvent);
   if (!handled) {
     await sendUsageMessage(chatId);
   }
@@ -175,22 +272,38 @@ bot.help(async (ctx) => {
   );
 });
 
+bot.command("stats", async (ctx) => {
+  if (!isAdminUser(ctx.from?.id)) {
+    return;
+  }
+
+  await sendStatsMessage(ctx.chat.id);
+});
+
 bot.command("token", async (ctx) => {
+  const usageEvent = getUsageEvent(ctx);
+  await usageStore.recordMessage(usageEvent);
   const text = ctx.message.text.replace(/^\/token(@\w+)?/i, "").trim();
-  await handleTokenCommand(ctx.chat.id, text);
+  await handleTokenCommand(ctx.chat.id, text, usageEvent);
 });
 
 bot.on("text", async (ctx) => {
+  const usageEvent = getUsageEvent(ctx);
+  await usageStore.recordMessage(usageEvent);
+
   if (/^\/\w+/.test(ctx.message.text)) {
     return;
   }
 
-  await handleLookup(ctx.chat.id, ctx.message.text);
+  await handleLookup(ctx.chat.id, ctx.message.text, usageEvent);
 });
 
 bot.catch((error) => {
   console.error("Telegram bot error:", error);
 });
+
+await mkdir(join(process.cwd(), "data"), { recursive: true });
+await usageStore.load();
 
 bot.launch().then(() => {
   console.log("Rise Telegram bot is running.");
