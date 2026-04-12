@@ -78,6 +78,11 @@ async function sendStatsMessage(chatId: number): Promise<void> {
   const lines = [
     "Bot usage stats",
     "",
+    `Rise API requests (1h): ${summary.requestsLastHour}`,
+    `Rise API requests (24h): ${summary.requestsLast24h}`,
+    `Requests failed (1h): ${summary.failedRequestsLastHour}`,
+    `Requests ok (1h): ${summary.successfulRequestsLastHour}`,
+    "",
     `Unique chats: ${summary.uniqueChats}`,
     `Private chats: ${summary.privateChats}`,
     `Group chats: ${summary.groupChats}`,

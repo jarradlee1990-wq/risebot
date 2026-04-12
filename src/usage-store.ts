@@ -26,6 +26,12 @@ type UserEntry = {
   lookupCount: number;
 };
 
+type LookupEvent = {
+  timestamp: string;
+  chatId: string;
+  outcome: "success" | "failure";
+};
+
 type UsageStatsFile = {
   createdAt: string;
   updatedAt: string;
@@ -35,6 +41,7 @@ type UsageStatsFile = {
   failedLookups: number;
   chats: Record<string, ChatEntry>;
   users: Record<string, UserEntry>;
+  lookupEvents: LookupEvent[];
 };
 
 export type UsageEvent = {
@@ -54,6 +61,10 @@ export type UsageSummary = {
   totalLookups: number;
   successfulLookups: number;
   failedLookups: number;
+  requestsLastHour: number;
+  requestsLast24h: number;
+  successfulRequestsLastHour: number;
+  failedRequestsLastHour: number;
   uniqueChats: number;
   privateChats: number;
   groupChats: number;
@@ -74,8 +85,11 @@ const EMPTY_STATS = (): UsageStatsFile => {
     failedLookups: 0,
     chats: {},
     users: {},
+    lookupEvents: [],
   };
 };
+
+const LOOKUP_EVENT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 export class UsageStore {
   private stats: UsageStatsFile = EMPTY_STATS();
@@ -86,7 +100,15 @@ export class UsageStore {
   async load(): Promise<void> {
     try {
       const raw = await readFile(this.filePath, "utf8");
-      this.stats = JSON.parse(raw) as UsageStatsFile;
+      const parsed = JSON.parse(raw) as Partial<UsageStatsFile>;
+      this.stats = {
+        ...EMPTY_STATS(),
+        ...parsed,
+        chats: parsed.chats ?? {},
+        users: parsed.users ?? {},
+        lookupEvents: parsed.lookupEvents ?? [],
+      };
+      this.pruneLookupEvents();
     } catch {
       this.stats = EMPTY_STATS();
       await this.save();
@@ -141,6 +163,13 @@ export class UsageStore {
       this.stats.failedLookups += 1;
     }
 
+    this.stats.lookupEvents.push({
+      timestamp: now,
+      chatId: String(event.chatId),
+      outcome,
+    });
+    this.pruneLookupEvents();
+
     const chatKey = String(event.chatId);
     const existingChat = this.stats.chats[chatKey];
     this.stats.chats[chatKey] = {
@@ -176,7 +205,15 @@ export class UsageStore {
   getSummary(): UsageSummary {
     const chats = Object.values(this.stats.chats);
     const users = Object.values(this.stats.users);
+    const now = Date.now();
+    const lastHour = now - 60 * 60 * 1000;
     const last24h = Date.now() - 24 * 60 * 60 * 1000;
+    const requestsLastHour = this.stats.lookupEvents.filter(
+      (event) => new Date(event.timestamp).getTime() >= lastHour,
+    );
+    const requestsLast24h = this.stats.lookupEvents.filter(
+      (event) => new Date(event.timestamp).getTime() >= last24h,
+    );
 
     const groupChats = chats.filter(
       (chat) => chat.type === "group" || chat.type === "supergroup",
@@ -189,6 +226,14 @@ export class UsageStore {
       totalLookups: this.stats.totalLookups,
       successfulLookups: this.stats.successfulLookups,
       failedLookups: this.stats.failedLookups,
+      requestsLastHour: requestsLastHour.length,
+      requestsLast24h: requestsLast24h.length,
+      successfulRequestsLastHour: requestsLastHour.filter(
+        (event) => event.outcome === "success",
+      ).length,
+      failedRequestsLastHour: requestsLastHour.filter(
+        (event) => event.outcome === "failure",
+      ).length,
       uniqueChats: chats.length,
       privateChats: chats.filter((chat) => chat.type === "private").length,
       groupChats: groupChats.length,
@@ -203,6 +248,13 @@ export class UsageStore {
         .sort((a, b) => b.lookupCount - a.lookupCount || b.messageCount - a.messageCount)
         .slice(0, 10),
     };
+  }
+
+  private pruneLookupEvents(): void {
+    const cutoff = Date.now() - LOOKUP_EVENT_RETENTION_MS;
+    this.stats.lookupEvents = this.stats.lookupEvents.filter(
+      (event) => new Date(event.timestamp).getTime() >= cutoff,
+    );
   }
 
   private async save(): Promise<void> {
