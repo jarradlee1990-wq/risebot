@@ -10,13 +10,26 @@ import { buildMarketCaption } from "./format.js";
 import { RiseApiClient, RiseApiError } from "./rise-api.js";
 import { UsageStore, type UsageEvent } from "./usage-store.js";
 
-const configSchema = z.object({
-  TELEGRAM_BOT_TOKEN: z.string().min(1, "TELEGRAM_BOT_TOKEN is required"),
-  RISE_API_KEY: z.string().min(1, "RISE_API_KEY is required"),
-  RISE_API_KEYS: z.string().optional(),
-  RISE_BASE_URL: z.string().url().default("https://public.rise.rich"),
-  ADMIN_TELEGRAM_USER_ID: z.string().optional(),
-});
+const configSchema = z
+  .object({
+    TELEGRAM_BOT_TOKEN: z.string().min(1, "TELEGRAM_BOT_TOKEN is required"),
+    RISE_API_KEY: z.string().optional(),
+    RISE_API_KEYS: z.string().optional(),
+    RISE_BASE_URL: z.string().url().default("https://public.rise.rich"),
+    ADMIN_TELEGRAM_USER_ID: z.string().optional(),
+  })
+  .superRefine((value, ctx) => {
+    const hasSingleKey = Boolean(value.RISE_API_KEY?.trim());
+    const hasMultipleKeys = Boolean(value.RISE_API_KEYS?.trim());
+
+    if (!hasSingleKey && !hasMultipleKeys) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["RISE_API_KEYS"],
+        message: "Set RISE_API_KEYS or RISE_API_KEY",
+      });
+    }
+  });
 
 const config = configSchema.parse({
   TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN,
@@ -36,7 +49,11 @@ function getRiseApiKeys(): string[] {
     return csvKeys;
   }
 
-  return [config.RISE_API_KEY];
+  if (config.RISE_API_KEY?.trim()) {
+    return [config.RISE_API_KEY.trim()];
+  }
+
+  throw new Error("No Rise API keys configured");
 }
 
 const riseApi = new RiseApiClient(config.RISE_BASE_URL, getRiseApiKeys());
