@@ -24,9 +24,12 @@ Telegram bot that accepts a Rise token mint or Rise market address and returns a
 ```env
 TELEGRAM_BOT_TOKEN=...
 RISE_API_KEY=...
+RISE_API_KEYS=key_1,key_2,key_3,key_4,key_5
 RISE_BASE_URL=https://public.rise.rich
 ADMIN_TELEGRAM_USER_ID=...
 ```
+
+`RISE_API_KEYS` is optional but recommended when you have multiple keys. The bot rotates keys in round-robin order and automatically retries with the next key when a request is rate-limited (`429`).
 
 3. Install dependencies:
 

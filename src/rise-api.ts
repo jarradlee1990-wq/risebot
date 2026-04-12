@@ -46,10 +46,23 @@ export class RiseApiError extends Error {
 }
 
 export class RiseApiClient {
+  private readonly apiKeys: string[];
+  private nextKeyIndex = 0;
+
   constructor(
     private readonly baseUrl: string,
-    private readonly apiKey: string,
-  ) {}
+    apiKeys: string | string[],
+  ) {
+    const normalizedKeys = (Array.isArray(apiKeys) ? apiKeys : [apiKeys])
+      .map((key) => key.trim())
+      .filter((key) => key.length > 0);
+
+    if (normalizedKeys.length === 0) {
+      throw new Error("At least one Rise API key is required");
+    }
+
+    this.apiKeys = normalizedKeys;
+  }
 
   async getMarket(address: string): Promise<RiseMarket> {
     const response = await this.request<MarketResponse>(`/markets/${address}`);
@@ -82,9 +95,43 @@ export class RiseApiClient {
   }
 
   private async request<T>(path: string): Promise<T> {
+    let lastRateLimitError: RiseApiError | null = null;
+
+    for (let attempt = 0; attempt < this.apiKeys.length; attempt += 1) {
+      const apiKey = this.getNextApiKey();
+
+      try {
+        return await this.requestWithApiKey<T>(path, apiKey);
+      } catch (error) {
+        if (!(error instanceof RiseApiError)) {
+          throw error;
+        }
+
+        if (error.status !== 429 || attempt === this.apiKeys.length - 1) {
+          throw error;
+        }
+
+        lastRateLimitError = error;
+      }
+    }
+
+    if (lastRateLimitError) {
+      throw lastRateLimitError;
+    }
+
+    throw new RiseApiError("Rise API request failed unexpectedly");
+  }
+
+  private getNextApiKey(): string {
+    const apiKey = this.apiKeys[this.nextKeyIndex];
+    this.nextKeyIndex = (this.nextKeyIndex + 1) % this.apiKeys.length;
+    return apiKey;
+  }
+
+  private async requestWithApiKey<T>(path: string, apiKey: string): Promise<T> {
     const response = await fetch(`${this.baseUrl}${path}`, {
       headers: {
-        "x-api-key": this.apiKey,
+        "x-api-key": apiKey,
       },
     });
 

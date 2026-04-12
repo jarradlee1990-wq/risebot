@@ -13,6 +13,7 @@ import { UsageStore, type UsageEvent } from "./usage-store.js";
 const configSchema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().min(1, "TELEGRAM_BOT_TOKEN is required"),
   RISE_API_KEY: z.string().min(1, "RISE_API_KEY is required"),
+  RISE_API_KEYS: z.string().optional(),
   RISE_BASE_URL: z.string().url().default("https://public.rise.rich"),
   ADMIN_TELEGRAM_USER_ID: z.string().optional(),
 });
@@ -20,11 +21,25 @@ const configSchema = z.object({
 const config = configSchema.parse({
   TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN,
   RISE_API_KEY: process.env.RISE_API_KEY,
+  RISE_API_KEYS: process.env.RISE_API_KEYS,
   RISE_BASE_URL: process.env.RISE_BASE_URL ?? "https://public.rise.rich",
   ADMIN_TELEGRAM_USER_ID: process.env.ADMIN_TELEGRAM_USER_ID,
 });
 
-const riseApi = new RiseApiClient(config.RISE_BASE_URL, config.RISE_API_KEY);
+function getRiseApiKeys(): string[] {
+  const csvKeys =
+    config.RISE_API_KEYS?.split(",")
+      .map((key) => key.trim())
+      .filter((key) => key.length > 0) ?? [];
+
+  if (csvKeys.length > 0) {
+    return csvKeys;
+  }
+
+  return [config.RISE_API_KEY];
+}
+
+const riseApi = new RiseApiClient(config.RISE_BASE_URL, getRiseApiKeys());
 const bot = new Telegraf(config.TELEGRAM_BOT_TOKEN);
 const usageStore = new UsageStore(join(process.cwd(), "data", "usage-stats.json"));
 
