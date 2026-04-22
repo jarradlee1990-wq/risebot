@@ -105,7 +105,7 @@ function formatChatLabel(chat: {
   return chat.title ?? chat.username ?? chat.firstName ?? chat.id;
 }
 
-async function sendStatsMessage(chatId: number): Promise<void> {
+async function sendStatsMessage(chatId: number, threadId?: number): Promise<void> {
   const summary = usageStore.getSummary();
   const lines = [
     "Bot usage stats",
@@ -139,10 +139,15 @@ async function sendStatsMessage(chatId: number): Promise<void> {
     `Updated: ${summary.updatedAt}`,
   ];
 
-  await bot.telegram.sendMessage(chatId, lines.join("\n"));
+  await bot.telegram.sendMessage(chatId, lines.join("\n"), {
+    ...(threadId ? { message_thread_id: threadId } : {}),
+  });
 }
 
-function extractAddress(input: string): string | null {
+function extractAddress(
+  input: string,
+  options: { riseOnly?: boolean } = {},
+): string | null {
   const trimmed = input.trim();
   if (!trimmed) {
     return null;
@@ -153,6 +158,10 @@ function extractAddress(input: string): string | null {
   const riseMint = matches.find((candidate) => RISE_MINT_REGEX.test(candidate));
   if (riseMint) {
     return riseMint;
+  }
+
+  if (options.riseOnly) {
+    return null;
   }
 
   const genericAddress = matches.find((candidate) => ADDRESS_REGEX.test(candidate));
@@ -186,7 +195,11 @@ function buildKeyboard(links: {
   return Markup.inlineKeyboard(rows);
 }
 
-async function sendMarketCard(chatId: number, address: string) {
+async function sendMarketCard(
+  chatId: number,
+  address: string,
+  threadId?: number,
+) {
   const market = await riseApi.getMarket(address);
 
   const collateralSymbol = riseApi.getCollateralSymbol(market.mint_main);
@@ -198,11 +211,14 @@ async function sendMarketCard(chatId: number, address: string) {
   );
   const keyboard = buildKeyboard(card);
 
+  const threadOpts = threadId ? { message_thread_id: threadId } : {};
+
   if (market.token_image) {
     try {
       await bot.telegram.sendPhoto(chatId, market.token_image, {
         caption: card.caption,
         parse_mode: "HTML",
+        ...threadOpts,
         ...keyboard,
       });
       return;
@@ -213,6 +229,7 @@ async function sendMarketCard(chatId: number, address: string) {
 
   await bot.telegram.sendMessage(chatId, card.caption, {
     parse_mode: "HTML",
+    ...threadOpts,
     ...keyboard,
   });
 }
@@ -221,24 +238,28 @@ async function handleLookup(
   chatId: number,
   rawInput: string,
   usageEvent?: UsageEvent,
+  options: { riseOnly?: boolean; threadId?: number } = {},
 ) {
-  const address = extractAddress(rawInput);
-  return handleResolvedLookup(chatId, address, usageEvent);
+  const address = extractAddress(rawInput, { riseOnly: options.riseOnly });
+  return handleResolvedLookup(chatId, address, usageEvent, options.threadId);
 }
 
 async function handleResolvedLookup(
   chatId: number,
   address: string | null,
   usageEvent?: UsageEvent,
+  threadId?: number,
 ) {
   if (!address) {
     return false;
   }
 
-  await bot.telegram.sendChatAction(chatId, "upload_photo");
+  const threadOpts = threadId ? { message_thread_id: threadId } : {};
+
+  await bot.telegram.sendChatAction(chatId, "upload_photo", threadOpts);
 
   try {
-    await sendMarketCard(chatId, address);
+    await sendMarketCard(chatId, address, threadId);
     if (usageEvent) {
       await usageStore.recordLookup(usageEvent, "success");
     }
@@ -251,6 +272,7 @@ async function handleResolvedLookup(
       await bot.telegram.sendMessage(
         chatId,
         `I couldn't load that Rise token.\n\n${error.message}`,
+        threadOpts,
       );
       return true;
     }
@@ -262,16 +284,18 @@ async function handleResolvedLookup(
     await bot.telegram.sendMessage(
       chatId,
       "Something went wrong while loading that token. Check your API key and try again.",
+      threadOpts,
     );
     return true;
   }
 }
 
-async function sendUsageMessage(chatId: number) {
+async function sendUsageMessage(chatId: number, threadId?: number) {
+  const threadOpts = threadId ? { message_thread_id: threadId } : {};
   await bot.telegram.sendMessage(
     chatId,
     "Send a Rise token mint or Rise market address.\n\nExamples:\n`/token 7r8Z8FMKnbfALBL8A86cnYCgboBYyoHw4bZ4Kz34rise`\n`7r8Z8FMKnbfALBL8A86cnYCgboBYyoHw4bZ4Kz34rise`",
-    { parse_mode: "Markdown" },
+    { parse_mode: "Markdown", ...threadOpts },
   );
 }
 
@@ -279,10 +303,11 @@ async function handleTokenCommand(
   chatId: number,
   rawInput: string,
   usageEvent?: UsageEvent,
+  threadId?: number,
 ) {
-  const handled = await handleLookup(chatId, rawInput, usageEvent);
+  const handled = await handleLookup(chatId, rawInput, usageEvent, { threadId });
   if (!handled) {
-    await sendUsageMessage(chatId);
+    await sendUsageMessage(chatId, threadId);
   }
 }
 
@@ -314,14 +339,19 @@ bot.command("stats", async (ctx) => {
     return;
   }
 
-  await sendStatsMessage(ctx.chat.id);
+  await sendStatsMessage(ctx.chat.id, ctx.message.message_thread_id);
 });
 
 bot.command("token", async (ctx) => {
   const usageEvent = getUsageEvent(ctx);
   await usageStore.recordMessage(usageEvent);
   const text = ctx.message.text.replace(/^\/token(@\w+)?/i, "").trim();
-  await handleTokenCommand(ctx.chat.id, text, usageEvent);
+  await handleTokenCommand(
+    ctx.chat.id,
+    text,
+    usageEvent,
+    ctx.message.message_thread_id,
+  );
 });
 
 bot.on("text", async (ctx) => {
@@ -332,7 +362,10 @@ bot.on("text", async (ctx) => {
     return;
   }
 
-  await handleLookup(ctx.chat.id, ctx.message.text, usageEvent);
+  await handleLookup(ctx.chat.id, ctx.message.text, usageEvent, {
+    riseOnly: true,
+    threadId: ctx.message.message_thread_id,
+  });
 });
 
 bot.catch((error) => {
